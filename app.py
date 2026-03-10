@@ -1,6 +1,7 @@
 # NOH Maternity Cashflow Dashboard
-# Run: streamlit run dashboards/app.py
+# Run: streamlit run app.py
 
+import os
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -9,10 +10,13 @@ from pathlib import Path
 
 st.set_page_config(page_title="NOH Maternity Cashflow", layout="wide")
 
+# --- Auth ---
+from auth import require_auth
+if not require_auth():
+    st.stop()
+
 st.title("NOH Maternity Programme — 24-Month Cashflow Model")
 st.caption("Disaggregated costs: antenatal midwifery · in-hospital midwifery · clinicians · board/facility · Rustenburg")
-
-OUT_DIR = Path("outputs")
 
 SCENARIO_COLORS = {
     "base":          "#599591",
@@ -21,22 +25,76 @@ SCENARIO_COLORS = {
     "high_cs_rate":  "#d4878f",
 }
 
-# --- Load data ---
-@st.cache_data
-def load_scenarios():
-    path = OUT_DIR / "2026-03-01_scenario_all.csv"
-    if not path.exists():
-        st.error(f"Missing: {path}. Run src/scenario_model.py first.")
-        st.stop()
-    return pd.read_csv(path)
 
-@st.cache_data
+# --- Data loading: Supabase first, CSV fallback ---
+def _get_supabase():
+    url = os.getenv("SUPABASE_URL", "")
+    key = os.getenv("SUPABASE_KEY", "")
+    if not url or not key:
+        try:
+            url = st.secrets.get("SUPABASE_URL", url)
+            key = st.secrets.get("SUPABASE_KEY", key)
+        except Exception:
+            pass
+    if url and key:
+        try:
+            from supabase import create_client
+            return create_client(url, key)
+        except Exception:
+            pass
+    return None
+
+
+@st.cache_data(ttl=300)
+def load_scenarios():
+    sb = _get_supabase()
+    if sb:
+        try:
+            # Fetch scenario names
+            scenarios = sb.table("scenarios").select("id, scenario_name").execute()
+            id_map = {r["id"]: r["scenario_name"] for r in scenarios.data}
+
+            # Fetch monthly data for noh-dashboard
+            result = sb.table("scenario_monthly").select("*").eq("source_app", "noh-dashboard").execute()
+            if result.data:
+                df = pd.DataFrame(result.data)
+                df["scenario"] = df["scenario_id"].map(id_map)
+                return df
+        except Exception:
+            pass
+
+    # CSV fallback
+    out_dir = Path("outputs")
+    path = out_dir / "2026-03-01_scenario_all.csv"
+    if path.exists():
+        return pd.read_csv(path)
+    st.error("No data available. Check Supabase connection or local CSV files.")
+    st.stop()
+
+
+@st.cache_data(ttl=300)
 def load_summary():
-    path = OUT_DIR / "2026-03-01_scenario_summary.csv"
-    if not path.exists():
-        st.error(f"Missing: {path}. Run src/scenario_model.py first.")
-        st.stop()
-    return pd.read_csv(path)
+    sb = _get_supabase()
+    if sb:
+        try:
+            scenarios = sb.table("scenarios").select("id, scenario_name").execute()
+            id_map = {r["id"]: r["scenario_name"] for r in scenarios.data}
+
+            result = sb.table("scenario_summary").select("*").eq("source_app", "noh-dashboard").execute()
+            if result.data:
+                df = pd.DataFrame(result.data)
+                df["scenario"] = df["scenario_id"].map(id_map)
+                return df
+        except Exception:
+            pass
+
+    out_dir = Path("outputs")
+    path = out_dir / "2026-03-01_scenario_summary.csv"
+    if path.exists():
+        return pd.read_csv(path)
+    st.error("No summary data available.")
+    st.stop()
+
 
 df      = load_scenarios()
 summary = load_summary()
