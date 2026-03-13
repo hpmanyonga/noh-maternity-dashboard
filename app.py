@@ -28,14 +28,12 @@ SCENARIO_COLORS = {
 
 # --- Data loading: Supabase first, CSV fallback ---
 def _get_supabase():
-    url = os.getenv("SUPABASE_URL", "")
-    key = os.getenv("SUPABASE_KEY", "")
-    if not url or not key:
-        try:
-            url = st.secrets.get("SUPABASE_URL", url)
-            key = st.secrets.get("SUPABASE_KEY", key)
-        except Exception:
-            pass
+    try:
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
+    except Exception:
+        url = os.getenv("SUPABASE_URL", "")
+        key = os.getenv("SUPABASE_KEY", "")
     if url and key:
         try:
             from supabase import create_client
